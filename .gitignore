@@ -1,4 +1,3 @@
-**/__pycache__/**
 src/lib/build
 src/lib/dist
 src/lib/drgn.egg-info
@@ -7,3 +6,5 @@ dist/
 .pytest_cache/
 **/target/**
 .vscode
+__pycache__
+.DS_Store

@@ -6,6 +6,8 @@ from drgn.kafka import kafka_config
 import uuid
 import argparse
 
+from typing import cast
+
 
 # defined in topics_config.yaml. if changed, need to rebuild the image.
 TOPIC = "trades.topic"
@@ -27,10 +29,10 @@ def consume_orders(consumer: Consumer):
         msgs = consumer.consume()
         if len(msgs) > 0:
             for msg in msgs:
-                if msg.error():
-                    code = msg.error().code()
-                    if code == KafkaError._PARTITION_EOF:
-                        print(f"No more msgs")
+                if error := msg.error():
+                    code = error.code()
+                    if code == KafkaError._PARTITION_EOF:  # type: ignore
+                        print("No more msgs")
                     else:
                         print(code)
                 else:
@@ -50,14 +52,17 @@ if __name__ == "__main__":
     offset = args.offset or 0
     print(f"INFO: topic {topic} offset {offset}")
     consumer = Consumer(
-        kafka_config
-        | {
-            "group.id": str(uuid.uuid4()),
-            "on_commit": commit,
-            "enable.auto.commit": False,
-            "enable.partition.eof": True,
-            "auto.offset.reset": "earliest",
-        }
+        cast(
+            dict,
+            kafka_config
+            | {
+                "group.id": str(uuid.uuid4()),
+                "on_commit": commit,
+                "enable.auto.commit": False,
+                "enable.partition.eof": True,
+                "auto.offset.reset": "earliest",
+            },
+        )
     )
     consumer.assign([TopicPartition(topic, 0, int(offset))])
 

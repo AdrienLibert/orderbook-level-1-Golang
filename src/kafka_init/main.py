@@ -4,11 +4,15 @@ import uuid
 import yaml
 
 from confluent_kafka import Producer
-from confluent_kafka.admin import AdminClient, NewTopic, TopicMetadata
+from confluent_kafka.admin import AdminClient
+from confluent_kafka.admin._metadata import TopicMetadata
+from confluent_kafka.cimpl import NewTopic
 from datetime import datetime, timezone
 from enum import StrEnum
 from drgn.config import env_config
 from drgn.kafka import kafka_config
+
+from typing import cast
 
 
 def load_yaml(path: str) -> dict:
@@ -113,7 +117,6 @@ class KafkaTopicSynchronizer:
 
 
 class ColdStartOrders:
-
     def __init__(
         self, producer: Producer, mid_price: float, spread: float, quantity: int
     ):
@@ -158,7 +161,7 @@ class ColdStartOrders:
 
 
 def main(script: str = "init_topics"):
-    admin_client = AdminClient(kafka_config)
+    admin_client = AdminClient(cast(dict, kafka_config))
 
     try:
         topics = admin_client.list_topics(timeout=1.0).topics
@@ -184,7 +187,7 @@ def main(script: str = "init_topics"):
                 mid_price = float(env_config["orderbook"]["mid_price"])
                 spread = float(env_config["orderbook"]["spread"])
                 quantity = int(env_config["orderbook"]["quantity"])
-                producer = Producer(kafka_config)
+                producer = Producer(cast(dict, kafka_config))
                 cold_start_producer = ColdStartOrders(
                     producer, mid_price, spread, quantity
                 )
@@ -194,6 +197,7 @@ def main(script: str = "init_topics"):
             time.sleep(sleep)
             sleep *= 1.5  # exp backoff
             retries -= 1
+
 
 if __name__ == "__main__":
     main()

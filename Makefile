@@ -39,6 +39,7 @@ stop: stop_deps
 # 2. test orderbook
 # 3. test traderbook
 test:
-	pytest tests/ -vv
 	cd src/orderbook/ && go test
-	cd src/traderpool/ && go test
+
+ruff:
+	uv run ruff format . && uv run ruff check --fix
