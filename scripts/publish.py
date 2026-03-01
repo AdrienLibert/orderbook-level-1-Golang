@@ -12,6 +12,8 @@ import time
 import random
 import argparse
 
+from typing import cast
+
 
 def delivery(err, msg):
     print(f"INFO: {msg.value()}")
@@ -78,7 +80,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-qty", dest="max_quantity", default=50)
     args = parser.parse_args()
 
-    producer = Producer(kafka_config)
+    producer = Producer(cast(dict, kafka_config))
 
     func = (
         partial(produce_order, producer, args.min_quantity, args.max_quantity)

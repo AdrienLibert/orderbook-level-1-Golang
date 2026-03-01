@@ -2,7 +2,7 @@ import json
 from confluent_kafka import Producer, Consumer, TopicPartition, KafkaError
 
 from drgn.config import env_config
-from typing import Generator
+from typing import cast, Generator
 
 kafka_config = {
     "bootstrap.servers": env_config["kafka"]["bootstrap_servers"],
@@ -18,20 +18,19 @@ class KafkaClient:
             "enable.partition.eof": True,
         }
         self._producer_config = kafka_config
-        print(self._producer_config)
         self._consumer = None
         self._producer = None
 
     @property
     def consumer(self) -> Consumer:
         if not self._consumer:  # lazy
-            self._consumer = Consumer(self._consumer_config)
+            self._consumer = Consumer(cast(dict, self._consumer_config))
         return self._consumer
 
     @property
     def producer(self) -> Producer:
         if not self._producer:  # lazy
-            self._producer = Producer(self._producer_config)
+            self._producer = Producer(cast(dict, self._producer_config))
         return self._producer
 
     def _get_topic_partition(self, topic: str):
@@ -56,13 +55,13 @@ class KafkaClient:
 
             messages = []
             for msg in msgs:
-                if msg.error():
-                    if msg.error().code() == KafkaError._PARTITION_EOF:
+                if error := msg.error():
+                    if error.code() == KafkaError._PARTITION_EOF:  # type: ignore
                         continue
                     else:
-                        print(f"ERROR - KafkaException - {msg.error()}")
-                else:
-                    messages.append(json.loads(msg.value().decode("utf-8")))
+                        print(f"ERROR - {type(KafkaError)} - {error}")
+                elif value := msg.value():
+                    messages.append(json.loads(value.decode("utf-8")))
 
                 yield messages
                 self.consumer.commit()
