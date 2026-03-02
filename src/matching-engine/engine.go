@@ -2,10 +2,9 @@ package main
 
 import (
 	"container/heap"
+	"context"
 	"fmt"
 	"math"
-	"os"
-	"os/signal"
 	"strings"
 	"time"
 
@@ -37,14 +36,15 @@ func (me *MatchingEngine) SetMetrics(metrics *EngineMetrics) {
 	me.metrics = metrics
 }
 
-func (me *MatchingEngine) Start() {
+func (me *MatchingEngine) Start(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	orderMessages, errors := me.kafkaClient.ConsumerMessagesChan(me.quoteTopic)
 
 	tradeProducer := me.kafkaClient.GetProducer()
 	pricePointProducer := me.kafkaClient.GetProducer()
-
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt)
 
 	consumedCount := 0
 	producedCount := 0
@@ -65,10 +65,10 @@ func (me *MatchingEngine) Start() {
 						me.metrics.ProducedMessagesCounter.Inc()
 					}
 				}
-			case <-signals:
+			case <-ctx.Done():
 				fmt.Println("INFO: interrupt is detected... closing trade producer...")
 				(*tradeProducer).Close()
-				tradeChannel <- Trade{}
+				return
 			}
 		}
 	}(tradeChannel)
@@ -89,10 +89,10 @@ func (me *MatchingEngine) Start() {
 						me.metrics.ProducedMessagesCounter.Inc()
 					}
 				}
-			case <-signals:
+			case <-ctx.Done():
 				fmt.Println("INFO: interrupt is detected... closing price point producer...")
 				(*pricePointProducer).Close()
-				pricePointChannel <- PricePoint{}
+				return
 			}
 		}
 	}(pricePointChannel)
@@ -115,7 +115,7 @@ func (me *MatchingEngine) Start() {
 					fmt.Printf("INFO: produced midprice every 1s: %.2f\n", midPrice)
 					pricePointChannel <- createPricePoint(midPrice)
 				}
-			case <-signals:
+			case <-ctx.Done():
 				fmt.Println("INFO: interrupt is detected... Closing quote midprice...")
 				return
 			}
@@ -145,9 +145,10 @@ func (me *MatchingEngine) Start() {
 				consumedCount++
 				fmt.Println("ERROR: received consumerError:", string(consumerError.Topic), string(consumerError.Partition), consumerError.Err)
 				orderChannel <- []byte{}
-			case <-signals:
+			case <-ctx.Done():
 				fmt.Println("INFO: interrupt is detected... Closing quote consummer...")
 				orderChannel <- []byte{}
+				return
 			}
 		}
 	}()
