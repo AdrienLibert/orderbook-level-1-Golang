@@ -229,3 +229,49 @@ func TestOrderBookAddOrderBestAskInvariant(t *testing.T) {
 		assert.Equal(t, currentStep.expectedLen, len(orderbook.PriceToSellOrders))
 	}
 }
+
+func TestOrderQueuePeekAndPopFIFO(t *testing.T) {
+	now := time.Now().UTC().Unix()
+	queue := NewOrderQueue()
+	first := &Order{OrderID: "first", OrderType: "limit", Price: 10.0, Quantity: 2, Timestamp: now}
+	second := &Order{OrderID: "second", OrderType: "limit", Price: 10.0, Quantity: 3, Timestamp: now}
+
+	queue.Push(first)
+	queue.Push(second)
+
+	front := queue.PeekFront()
+	if assert.NotNil(t, front) {
+		assert.Equal(t, "first", front.OrderID)
+	}
+	assert.Equal(t, 2, queue.Len())
+
+	popped, ok := queue.PopFront()
+	assert.True(t, ok)
+	if assert.NotNil(t, popped) {
+		assert.Equal(t, "first", popped.OrderID)
+	}
+	assert.Equal(t, 1, queue.Len())
+
+	front = queue.PeekFront()
+	if assert.NotNil(t, front) {
+		assert.Equal(t, "second", front.OrderID)
+	}
+}
+
+func TestOrderQueueCompactsAndPreservesOrder(t *testing.T) {
+	now := time.Now().UTC().Unix()
+	queue := NewOrderQueue()
+
+	for index := 0; index < 128; index++ {
+		queue.Push(&Order{OrderID: "order", OrderType: "limit", Price: 10.0, Quantity: 1, Timestamp: now})
+	}
+
+	for index := 0; index < 64; index++ {
+		_, ok := queue.PopFront()
+		assert.True(t, ok)
+	}
+
+	assert.Equal(t, 64, queue.Len())
+	assert.Equal(t, 0, queue.head)
+	assert.Equal(t, 64, len(queue.items))
+}

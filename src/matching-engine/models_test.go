@@ -328,12 +328,20 @@ func TestRejectAndContinueMalformedInput(t *testing.T) {
 	}
 
 	bidOrders := orderbook.PriceToBuyOrders[10.0]
-	if bidOrders == nil || len(*bidOrders) != 1 || (*bidOrders)[0].OrderID != "buy-1" || (*bidOrders)[0].Quantity != 4 {
+	bidFront := (*Order)(nil)
+	if bidOrders != nil {
+		bidFront = bidOrders.PeekFront()
+	}
+	if bidOrders == nil || bidOrders.Len() != 1 || bidFront == nil || bidFront.OrderID != "buy-1" || bidFront.Quantity != 4 {
 		t.Fatalf("unexpected bid queue after reject-and-continue: %+v", bidOrders)
 	}
 
 	askOrders := orderbook.PriceToSellOrders[11.0]
-	if askOrders == nil || len(*askOrders) != 1 || (*askOrders)[0].OrderID != "sell-1" || (*askOrders)[0].Quantity != 3 {
+	askFront := (*Order)(nil)
+	if askOrders != nil {
+		askFront = askOrders.PeekFront()
+	}
+	if askOrders == nil || askOrders.Len() != 1 || askFront == nil || askFront.OrderID != "sell-1" || askFront.Quantity != 3 {
 		t.Fatalf("unexpected ask queue after reject-and-continue: %+v", askOrders)
 	}
 }
@@ -367,12 +375,20 @@ func TestRejectZeroQuantityOrderNoSideEffects(t *testing.T) {
 	}
 
 	bidOrders := orderbook.PriceToBuyOrders[10.0]
-	if bidOrders == nil || len(*bidOrders) != 1 || (*bidOrders)[0].OrderID != "resting-buy" || (*bidOrders)[0].Quantity != 3 {
+	bidFront := (*Order)(nil)
+	if bidOrders != nil {
+		bidFront = bidOrders.PeekFront()
+	}
+	if bidOrders == nil || bidOrders.Len() != 1 || bidFront == nil || bidFront.OrderID != "resting-buy" || bidFront.Quantity != 3 {
 		t.Fatalf("unexpected bid queue after zero-quantity order: %+v", bidOrders)
 	}
 
 	askOrders := orderbook.PriceToSellOrders[11.0]
-	if askOrders == nil || len(*askOrders) != 1 || (*askOrders)[0].OrderID != "resting-sell" || (*askOrders)[0].Quantity != 4 {
+	askFront := (*Order)(nil)
+	if askOrders != nil {
+		askFront = askOrders.PeekFront()
+	}
+	if askOrders == nil || askOrders.Len() != 1 || askFront == nil || askFront.OrderID != "resting-sell" || askFront.Quantity != 4 {
 		t.Fatalf("unexpected ask queue after zero-quantity order: %+v", askOrders)
 	}
 }
