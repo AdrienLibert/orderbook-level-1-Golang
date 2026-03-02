@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -136,7 +137,7 @@ func TestConvertMessageToTradeScenarios(t *testing.T) {
 			payload: []byte(`{"trade_id":"t1","order_id":"o1","quantity":5,"price":101.1,"action":"BUY","status":"FILLED","timestamp":9}`),
 			assertion: func(t *testing.T, trade Trade) {
 				t.Helper()
-				if trade.TradeId != "t1" || trade.OrderId != "o1" || trade.Quantity != 5 || trade.Price != 101.1 {
+				if trade.TradeId != "t1" || trade.OrderId != "o1" || trade.Quantity != 5 || math.Abs(trade.Price-101.1) > 1e-9 || trade.Action != "BUY" || trade.Status != "FILLED" || trade.Timestamp != 9 {
 					t.Fatalf("unexpected trade: %+v", trade)
 				}
 			},
@@ -226,6 +227,63 @@ func TestAssignEmptyPartitionsReturnsExplicitError(t *testing.T) {
 	}
 }
 
+func TestAssignPartitionsFailureReturnsExplicitError(t *testing.T) {
+	kc := &KafkaClient{}
+	fakeMaster := &fakeConsumer{
+		partitionsErr: errors.New("partitions unavailable"),
+	}
+
+	messages, consumerErrors := kc.Assign(fakeMaster, "trades.topic")
+
+	select {
+	case consumerError, ok := <-consumerErrors:
+		if !ok {
+			t.Fatalf("expected setup error, got closed channel")
+		}
+		if consumerError == nil || consumerError.Err == nil {
+			t.Fatalf("expected non-nil setup error")
+		}
+		if !strings.Contains(consumerError.Err.Error(), "unable to list partitions for topic trades.topic") {
+			t.Fatalf("unexpected error: %v", consumerError.Err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for setup error")
+	}
+
+	if _, ok := <-messages; ok {
+		t.Fatalf("expected messages channel to be closed")
+	}
+}
+
+func TestAssignTopicsFailureReturnsExplicitError(t *testing.T) {
+	kc := &KafkaClient{}
+	fakeMaster := &fakeConsumer{
+		partitions: []int32{0},
+		topicsErr:   errors.New("topics unavailable"),
+	}
+
+	messages, consumerErrors := kc.Assign(fakeMaster, "trades.topic")
+
+	select {
+	case consumerError, ok := <-consumerErrors:
+		if !ok {
+			t.Fatalf("expected setup error, got closed channel")
+		}
+		if consumerError == nil || consumerError.Err == nil {
+			t.Fatalf("expected non-nil setup error")
+		}
+		if !strings.Contains(consumerError.Err.Error(), "unable to list topics") {
+			t.Fatalf("unexpected error: %v", consumerError.Err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for setup error")
+	}
+
+	if _, ok := <-messages; ok {
+		t.Fatalf("expected messages channel to be closed")
+	}
+}
+
 func TestAssignMissingTopicReturnsExplicitError(t *testing.T) {
 	kc := &KafkaClient{}
 	fakeMaster := &fakeConsumer{
@@ -297,4 +355,37 @@ func TestAssignForwardsMessagesAndErrors(t *testing.T) {
 	}
 
 	fakePartition.AsyncClose()
+}
+
+func TestAssignConsumePartitionFailureReturnsExplicitError(t *testing.T) {
+	kc := &KafkaClient{}
+	fakeMaster := &fakeConsumer{
+		partitions: []int32{0},
+		topics:     []string{"trades.topic"},
+		consumeErr: errors.New("consume partition failed"),
+	}
+
+	messages, consumerErrors := kc.Assign(fakeMaster, "trades.topic")
+
+	select {
+	case consumerError, ok := <-consumerErrors:
+		if !ok {
+			t.Fatalf("expected setup error, got closed channel")
+		}
+		if consumerError == nil || consumerError.Err == nil {
+			t.Fatalf("expected non-nil setup error")
+		}
+		if !strings.Contains(consumerError.Err.Error(), "unable to consume partition for topic trades.topic") {
+			t.Fatalf("unexpected error: %v", consumerError.Err)
+		}
+		if consumerError.Partition != 0 {
+			t.Fatalf("expected partition 0, got %d", consumerError.Partition)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for setup error")
+	}
+
+	if _, ok := <-messages; ok {
+		t.Fatalf("expected messages channel to be closed")
+	}
 }

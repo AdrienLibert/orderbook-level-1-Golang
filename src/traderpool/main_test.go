@@ -2,20 +2,24 @@ package main
 
 import "testing"
 
-func TestGetenvFallbackWhenUnset(t *testing.T) {
-	t.Setenv("NUM_TRADERS", "")
-
-	value := getenv("NUM_TRADERS", "10")
-	if value != "10" {
-		t.Fatalf("expected fallback value 10, got %q", value)
+func TestGetenv(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		fallback string
+		want     string
+	}{
+		{name: "fallback when unset", envValue: "", fallback: "10", want: "10"},
+		{name: "returns env value", envValue: "42", fallback: "10", want: "42"},
 	}
-}
 
-func TestGetenvReturnsEnvValueWhenSet(t *testing.T) {
-	t.Setenv("NUM_TRADERS", "42")
-
-	value := getenv("NUM_TRADERS", "10")
-	if value != "42" {
-		t.Fatalf("expected env value 42, got %q", value)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("NUM_TRADERS", tc.envValue)
+			value := getenv("NUM_TRADERS", tc.fallback)
+			if value != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, value)
+			}
+		})
 	}
 }
