@@ -58,11 +58,24 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 				if !ok {
 					return
 				}
-				producerMessage := sarama.ProducerMessage{Topic: me.tradeTopic, Value: sarama.StringEncoder(trade.toJSON())}
+				producerMessage := sarama.ProducerMessage{Topic: me.tradeTopic, Value: sarama.ByteEncoder(trade.toMessage())}
 				par, off, err := (*tradeProducer).SendMessage(&producerMessage)
 				if err != nil {
 					fmt.Printf("ERROR: producing trade in partition %d, offset %d: %s", par, off, err)
 				} else {
+					fmt.Printf(
+						"INFO: produced trade topic=%s partition=%d offset=%d trade_id=%s order_id=%s action=%s quantity=%d price=%.6f status=%s timestamp=%d\n",
+						me.tradeTopic,
+						par,
+						off,
+						trade.TradeId,
+						trade.OrderId,
+						trade.Action,
+						trade.Quantity,
+						trade.Price,
+						trade.Status,
+						trade.Timestamp,
+					)
 					fmt.Println("INFO: produced trade:", producerMessage)
 					producedCount.Add(1)
 					if me.metrics != nil {
@@ -85,11 +98,18 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 				if !ok {
 					return
 				}
-				producerMessage := sarama.ProducerMessage{Topic: me.pricePointTopic, Value: sarama.StringEncoder(pricePoint.toJSON())}
+				producerMessage := sarama.ProducerMessage{Topic: me.pricePointTopic, Value: sarama.ByteEncoder(pricePoint.toMessage())}
 				par, off, err := (*pricePointProducer).SendMessage(&producerMessage)
 				if err != nil {
 					fmt.Printf("ERROR: producing price point in partition %d, offset %d: %s", par, off, err)
 				} else {
+					fmt.Printf(
+						"INFO: produced price point topic=%s partition=%d offset=%d price=%.6f\n",
+						me.pricePointTopic,
+						par,
+						off,
+						pricePoint.Price,
+					)
 					fmt.Println("INFO: produced price point:", producerMessage)
 					producedCount.Add(1)
 					if me.metrics != nil {
@@ -163,7 +183,7 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 				fmt.Println("ERROR: received consumerError:", string(consumerError.Topic), string(consumerError.Partition), consumerError.Err)
 				orderChannel <- []byte{}
 			case <-ctx.Done():
-				fmt.Println("INFO: interrupt is detected... Closing quote consummer...")
+				fmt.Println("INFO: interrupt is detected... Closing quote consumer...")
 				orderChannel <- []byte{}
 				return
 			}
@@ -214,19 +234,6 @@ func (me *MatchingEngine) Process(inOrder *Order, producerChannel chan<- Trade, 
 		if inOrder.Quantity < 0 {
 			inOrder.Quantity = -inOrder.Quantity
 		}
-		comparator = func(x, y float64) bool { return x <= y }
-	} else if inOrder.Quantity > 0 {
-		oppositeBook = &me.orderBook.PriceToSellOrders
-		oppositeBestPrice = me.orderBook.BestAsk
-		inAction = "BUY"
-		outAction = "SELL"
-		comparator = func(x, y float64) bool { return x >= y }
-	} else {
-		oppositeBook = &me.orderBook.PriceToBuyOrders
-		oppositeBestPrice = me.orderBook.BestBid
-		inAction = "SELL"
-		outAction = "BUY"
-		inOrder.Quantity = -inOrder.Quantity
 		comparator = func(x, y float64) bool { return x <= y }
 	}
 
