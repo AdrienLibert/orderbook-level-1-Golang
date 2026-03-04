@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -46,21 +47,24 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 	tradeProducer := me.kafkaClient.GetProducer()
 	pricePointProducer := me.kafkaClient.GetProducer()
 
-	consumedCount := 0
-	producedCount := 0
+	var consumedCount atomic.Int64
+	var producedCount atomic.Int64
 
 	tradeChannel := make(chan Trade)
 	go func(tradeMessages <-chan Trade) {
 		for {
 			select {
-			case trade := <-tradeMessages:
+			case trade, ok := <-tradeMessages:
+				if !ok {
+					return
+				}
 				producerMessage := sarama.ProducerMessage{Topic: me.tradeTopic, Value: sarama.StringEncoder(trade.toJSON())}
 				par, off, err := (*tradeProducer).SendMessage(&producerMessage)
 				if err != nil {
 					fmt.Printf("ERROR: producing trade in partition %d, offset %d: %s", par, off, err)
 				} else {
 					fmt.Println("INFO: produced trade:", producerMessage)
-					producedCount++
+					producedCount.Add(1)
 					if me.metrics != nil {
 						me.metrics.ProducedMessagesCounter.Inc()
 					}
@@ -77,14 +81,17 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 	go func(pricePointMessages <-chan PricePoint) {
 		for {
 			select {
-			case pricePoint := <-pricePointMessages:
+			case pricePoint, ok := <-pricePointMessages:
+				if !ok {
+					return
+				}
 				producerMessage := sarama.ProducerMessage{Topic: me.pricePointTopic, Value: sarama.StringEncoder(pricePoint.toJSON())}
 				par, off, err := (*pricePointProducer).SendMessage(&producerMessage)
 				if err != nil {
 					fmt.Printf("ERROR: producing price point in partition %d, offset %d: %s", par, off, err)
 				} else {
 					fmt.Println("INFO: produced price point:", producerMessage)
-					producedCount++
+					producedCount.Add(1)
 					if me.metrics != nil {
 						me.metrics.ProducedMessagesCounter.Inc()
 					}
@@ -126,7 +133,12 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 	go func() {
 		for {
 			select {
-			case msg := <-orderMessages:
+			case msg, ok := <-orderMessages:
+				if !ok {
+					fmt.Println("INFO: quote consumer channel closed")
+					orderChannel <- []byte{}
+					return
+				}
 				if me.metrics != nil {
 					me.metrics.ConsumedOrdersCounter.Inc()
 				}
@@ -138,11 +150,16 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 					}
 				} else {
 					fmt.Println("DEBUG: received quote:", order)
-					consumedCount++
+					consumedCount.Add(1)
 				}
 				me.Process(&order, tradeChannel, pricePointChannel)
-			case consumerError := <-errors:
-				consumedCount++
+			case consumerError, ok := <-errors:
+				if !ok {
+					fmt.Println("INFO: quote consumer error channel closed")
+					orderChannel <- []byte{}
+					return
+				}
+				consumedCount.Add(1)
 				fmt.Println("ERROR: received consumerError:", string(consumerError.Topic), string(consumerError.Partition), consumerError.Err)
 				orderChannel <- []byte{}
 			case <-ctx.Done():
@@ -153,7 +170,7 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 		}
 	}()
 	<-orderChannel
-	fmt.Println("INFO: closing... processed", consumedCount, "messages and produced", producedCount, "messages")
+	fmt.Println("INFO: closing... processed", consumedCount.Load(), "messages and produced", producedCount.Load(), "messages")
 }
 
 func Min(a, b int64) int64 {
@@ -174,7 +191,7 @@ func (me *MatchingEngine) Process(inOrder *Order, producerChannel chan<- Trade, 
 		me.updateOrderbookGauges()
 	}()
 
-	var oppositeBook *map[float64]*[]*Order
+	var oppositeBook *map[float64]*OrderQueue
 	var oppositeBestPrice Heap
 	var inAction string
 	var outAction string
@@ -217,12 +234,11 @@ func (me *MatchingEngine) Process(inOrder *Order, producerChannel chan<- Trade, 
 	for inOrder.Quantity > 0 && oppositeBestPrice.Len() > 0 && comparator(inOrder.Price, oppositeBestPrice.Peak().(float64)) {
 		oppositeBestPriceQueue := (*oppositeBook)[oppositeBestPrice.Peak().(float64)]
 		// loop on nest price queue
-		for inOrder.Quantity > 0 && len(*oppositeBestPriceQueue) > 0 {
-			outOrder, err := cut(0, oppositeBestPriceQueue)
-			if err != nil {
+		for inOrder.Quantity > 0 && oppositeBestPriceQueue != nil && oppositeBestPriceQueue.Len() > 0 {
+			outOrder := oppositeBestPriceQueue.PeekFront()
+			if outOrder == nil {
 				break
 			}
-			me.orderBook.decrementOpenOrderCount()
 			tradeQuantity := Min(inOrder.Quantity, outOrder.Quantity)
 			price := outOrder.Price
 			tradeId := uuid.New().String()
@@ -249,11 +265,14 @@ func (me *MatchingEngine) Process(inOrder *Order, producerChannel chan<- Trade, 
 				pricePointChannel <- createPricePoint(price)
 			}
 
-			if outOrder.Quantity > 0 {
-				me.orderBook.AddOrder(outOrder, outAction)
+			if outOrder.Quantity == 0 {
+				_, popped := oppositeBestPriceQueue.PopFront()
+				if popped {
+					me.orderBook.decrementOpenOrderCount()
+				}
 			}
 		}
-		if len(*oppositeBestPriceQueue) == 0 {
+		if oppositeBestPriceQueue == nil || oppositeBestPriceQueue.Len() == 0 {
 			bestPrice := heap.Pop(oppositeBestPrice).(float64)
 			delete(*oppositeBook, bestPrice)
 		}

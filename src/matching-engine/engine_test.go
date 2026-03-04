@@ -24,26 +24,26 @@ func collectPricePoints(pricePointChannel <-chan PricePoint, count int) []PriceP
 	return pricePoints
 }
 
-func levelQuantities(level *[]*Order) []int64 {
+func levelQuantities(level *OrderQueue) []int64 {
 	if level == nil {
 		return []int64{}
 	}
 
-	quantities := make([]int64, 0, len(*level))
-	for _, order := range *level {
+	quantities := make([]int64, 0, level.Len())
+	for _, order := range level.items[level.head:] {
 		quantities = append(quantities, order.Quantity)
 	}
 
 	return quantities
 }
 
-func levelOrderIDs(level *[]*Order) []string {
+func levelOrderIDs(level *OrderQueue) []string {
 	if level == nil {
 		return []string{}
 	}
 
-	orderIDs := make([]string, 0, len(*level))
-	for _, order := range *level {
+	orderIDs := make([]string, 0, level.Len())
+	for _, order := range level.items[level.head:] {
 		orderIDs = append(orderIDs, order.OrderID)
 	}
 
@@ -110,8 +110,8 @@ func TestMatchingEngineProcessScenarios(t *testing.T) {
 
 				assert.Equal(t, 1, orderbook.BestAsk.Len())
 				assert.Equal(t, 11.0, orderbook.BestAsk.Peak())
-				assert.Equal(t, []int64{2, 6}, levelQuantities(orderbook.PriceToSellOrders[11.0]))
-				assert.Equal(t, []string{"resting-sell-2", "resting-sell-1"}, levelOrderIDs(orderbook.PriceToSellOrders[11.0]))
+				assert.Equal(t, []int64{6, 2}, levelQuantities(orderbook.PriceToSellOrders[11.0]))
+				assert.Equal(t, []string{"resting-sell-1", "resting-sell-2"}, levelOrderIDs(orderbook.PriceToSellOrders[11.0]))
 			},
 		},
 		{
