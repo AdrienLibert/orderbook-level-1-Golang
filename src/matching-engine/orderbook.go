@@ -2,6 +2,76 @@ package main
 
 import "container/heap"
 
+const (
+	queueCompactMinHead = 64
+)
+
+type OrderQueue struct {
+	items []*Order
+	head  int
+}
+
+func NewOrderQueue() *OrderQueue {
+	// Complexity: O(1) time, O(1) additional space.
+	return &OrderQueue{items: make([]*Order, 0), head: 0}
+}
+
+func (q *OrderQueue) Push(order *Order) {
+	// Complexity: amortized O(1) time for append; O(1) additional space unless growth triggers reallocation.
+	if q == nil {
+		return
+	}
+	q.items = append(q.items, order)
+}
+
+func (q *OrderQueue) PeekFront() *Order {
+	// Complexity: O(1) time, O(1) space.
+	if q == nil || q.Len() == 0 {
+		return nil
+	}
+	return q.items[q.head]
+}
+
+func (q *OrderQueue) PopFront() (*Order, bool) {
+	// Complexity: amortized O(1) time; worst-case O(n) when compaction runs (n = active elements).
+	// Space: O(1) normally; worst-case O(n) temporary allocation during compaction.
+	if q == nil || q.Len() == 0 {
+		return nil, false
+	}
+	order := q.items[q.head]
+	q.items[q.head] = nil
+	q.head++
+	q.compactIfNeeded()
+	return order, true
+}
+
+func (q *OrderQueue) Len() int {
+	// Complexity: O(1) time, O(1) space.
+	if q == nil {
+		return 0
+	}
+	return len(q.items) - q.head
+}
+
+func (q *OrderQueue) compactIfNeeded() {
+	// Complexity: O(1) when no compaction (or full-drain reset), O(n) when compacting (n = active elements copied).
+	// Space: O(1) without compaction; O(n) additional space during compaction allocation.
+	if q == nil {
+		return
+	}
+	if q.head == len(q.items) {
+		q.items = q.items[:0]
+		q.head = 0
+		return
+	}
+	if q.head >= queueCompactMinHead && q.head*2 >= len(q.items) {
+		active := make([]*Order, len(q.items)-q.head)
+		copy(active, q.items[q.head:])
+		q.items = active
+		q.head = 0
+	}
+}
+
 type Heap interface {
 	heap.Interface
 	Push(x interface{})
@@ -62,21 +132,21 @@ func (h *MaxHeap) Peak() interface{} {
 }
 
 type Orderbook struct {
-	BestBid       *MaxHeap
-	BestAsk       *MinHeap
-	PriceToVolume map[float64]float64
+	BestBid        *MaxHeap
+	BestAsk        *MinHeap
+	PriceToVolume  map[float64]float64
 	openOrderCount int
 	// indexes + containers
-	PriceToBuyOrders  map[float64]*[]*Order
-	PriceToSellOrders map[float64]*[]*Order
+	PriceToBuyOrders  map[float64]*OrderQueue
+	PriceToSellOrders map[float64]*OrderQueue
 }
 
 func NewOrderBook() *Orderbook {
 	o := new(Orderbook)
 	o.BestBid = &MaxHeap{}
 	o.BestAsk = &MinHeap{}
-	o.PriceToBuyOrders = make(map[float64]*[]*Order)
-	o.PriceToSellOrders = make(map[float64]*[]*Order)
+	o.PriceToBuyOrders = make(map[float64]*OrderQueue)
+	o.PriceToSellOrders = make(map[float64]*OrderQueue)
 	return o
 }
 
@@ -90,20 +160,24 @@ func (o *Orderbook) AddOrder(order *Order, orderAction string) {
 	if orderAction == "BUY" {
 		val, ok := o.PriceToBuyOrders[price]
 		if ok {
-			*val = append(*val, order)
+			val.Push(order)
 		} else {
 			heap.Push(o.BestBid, price)
-			o.PriceToBuyOrders[price] = &[]*Order{order}
+			q := NewOrderQueue()
+			q.Push(order)
+			o.PriceToBuyOrders[price] = q
 		}
 		o.openOrderCount++
 	}
 	if orderAction == "SELL" {
 		val, ok := o.PriceToSellOrders[price]
 		if ok {
-			*val = append(*val, order)
+			val.Push(order)
 		} else {
 			heap.Push(o.BestAsk, price)
-			o.PriceToSellOrders[price] = &[]*Order{order}
+			q := NewOrderQueue()
+			q.Push(order)
+			o.PriceToSellOrders[price] = q
 		}
 		o.openOrderCount++
 	}
