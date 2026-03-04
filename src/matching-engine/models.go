@@ -34,7 +34,7 @@ type PricePoint struct {
 func (trade Trade) toMessage() []byte {
 	message, err := proto.Marshal(tradeToProto(trade))
 	if err != nil {
-		fmt.Println("ERROR: invalid trade being converted to protobuf message:", err)
+		logWithMethod("matching.model.trade_json").Error("trade serialization failed", "order_id", trade.OrderId, "correlation_id", trade.TradeId, "error", err)
 	}
 	return message
 }
@@ -42,7 +42,7 @@ func (trade Trade) toMessage() []byte {
 func (pricePoint PricePoint) toMessage() []byte {
 	message, err := proto.Marshal(pricePointToProto(pricePoint))
 	if err != nil {
-		fmt.Println("ERROR: invalid price point being converted to protobuf message:", err)
+		logWithMethod("matching.model.price_point_json").Error("price point serialization failed", "price", pricePoint.Price, "error", err)
 	}
 	return message
 }

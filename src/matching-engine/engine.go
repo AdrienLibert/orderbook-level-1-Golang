@@ -52,6 +52,7 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 
 	tradeChannel := make(chan Trade)
 	go func(tradeMessages <-chan Trade) {
+		logger := logWithMethod("kafka.produce.trade")
 		for {
 			select {
 			case trade, ok := <-tradeMessages:
@@ -61,29 +62,16 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 				producerMessage := sarama.ProducerMessage{Topic: me.tradeTopic, Value: sarama.ByteEncoder(trade.toMessage())}
 				par, off, err := (*tradeProducer).SendMessage(&producerMessage)
 				if err != nil {
-					fmt.Printf("ERROR: producing trade in partition %d, offset %d: %s", par, off, err)
+					logger.Error("trade produce failed", "topic", me.tradeTopic, "partition", par, "offset", off, "error", err, "order_id", trade.OrderId, "correlation_id", trade.TradeId)
 				} else {
-					fmt.Printf(
-						"INFO: produced trade topic=%s partition=%d offset=%d trade_id=%s order_id=%s action=%s quantity=%d price=%.6f status=%s timestamp=%d\n",
-						me.tradeTopic,
-						par,
-						off,
-						trade.TradeId,
-						trade.OrderId,
-						trade.Action,
-						trade.Quantity,
-						trade.Price,
-						trade.Status,
-						trade.Timestamp,
-					)
-					fmt.Println("INFO: produced trade:", producerMessage)
+					logger.Info("trade produced", "topic", me.tradeTopic, "partition", par, "offset", off, "order_id", trade.OrderId, "correlation_id", trade.TradeId)
 					producedCount.Add(1)
 					if me.metrics != nil {
 						me.metrics.ProducedMessagesCounter.Inc()
 					}
 				}
 			case <-ctx.Done():
-				fmt.Println("INFO: interrupt is detected... closing trade producer...")
+				logger.Info("context canceled, closing producer", "topic", me.tradeTopic)
 				(*tradeProducer).Close()
 				return
 			}
@@ -92,6 +80,7 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 
 	pricePointChannel := make(chan PricePoint)
 	go func(pricePointMessages <-chan PricePoint) {
+		logger := logWithMethod("kafka.produce.price_point")
 		for {
 			select {
 			case pricePoint, ok := <-pricePointMessages:
@@ -101,15 +90,8 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 				producerMessage := sarama.ProducerMessage{Topic: me.pricePointTopic, Value: sarama.ByteEncoder(pricePoint.toMessage())}
 				par, off, err := (*pricePointProducer).SendMessage(&producerMessage)
 				if err != nil {
-					fmt.Printf("ERROR: producing price point in partition %d, offset %d: %s", par, off, err)
+					logger.Error("price point produce failed", "topic", me.pricePointTopic, "partition", par, "offset", off, "error", err)
 				} else {
-					fmt.Printf(
-						"INFO: produced price point topic=%s partition=%d offset=%d price=%.6f\n",
-						me.pricePointTopic,
-						par,
-						off,
-						pricePoint.Price,
-					)
 					fmt.Println("INFO: produced price point:", producerMessage)
 					producedCount.Add(1)
 					if me.metrics != nil {
@@ -117,13 +99,14 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 					}
 				}
 			case <-ctx.Done():
-				fmt.Println("INFO: interrupt is detected... closing price point producer...")
+				logger.Info("context canceled, closing producer", "topic", me.pricePointTopic)
 				(*pricePointProducer).Close()
 				return
 			}
 		}
 	}(pricePointChannel)
 	go func() {
+		logger := logWithMethod("matching.mid_price")
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -139,11 +122,11 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 				}
 				if bestBid > 0 && bestAsk < math.MaxFloat64 {
 					midPrice := (bestBid + bestAsk) / 2
-					fmt.Printf("INFO: produced midprice every 1s: %.2f\n", midPrice)
+					logger.Info("mid price emitted", "mid_price", midPrice)
 					pricePointChannel <- createPricePoint(midPrice)
 				}
 			case <-ctx.Done():
-				fmt.Println("INFO: interrupt is detected... Closing quote midprice...")
+				logger.Info("context canceled, stopping mid price publisher")
 				return
 			}
 		}
@@ -151,11 +134,12 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 
 	orderChannel := make(chan []byte)
 	go func() {
+		consumeLogger := logWithMethod("kafka.consume.order")
 		for {
 			select {
 			case msg, ok := <-orderMessages:
 				if !ok {
-					fmt.Println("INFO: quote consumer channel closed")
+					consumeLogger.Info("consumer message channel closed", "topic", me.quoteTopic)
 					orderChannel <- []byte{}
 					return
 				}
@@ -164,33 +148,33 @@ func (me *MatchingEngine) Start(ctx context.Context) {
 				}
 				order, err := messageToOrder(msg.Value)
 				if err != nil {
-					fmt.Println("ERROR: malformed message:", msg.Value)
+					consumeLogger.Error("malformed order message", "topic", me.quoteTopic, "partition", msg.Partition, "offset", msg.Offset, "payload", string(msg.Value), "error", err)
 					if me.metrics != nil {
 						me.metrics.RejectedMalformedCounter.Inc()
 					}
 				} else {
-					fmt.Println("DEBUG: received quote:", order)
+					consumeLogger.Debug("order consumed", "topic", me.quoteTopic, "partition", msg.Partition, "offset", msg.Offset, "order_id", order.OrderID, "action", order.Action, "price", order.Price, "quantity", order.Quantity)
 					consumedCount.Add(1)
 				}
 				me.Process(&order, tradeChannel, pricePointChannel)
 			case consumerError, ok := <-errors:
 				if !ok {
-					fmt.Println("INFO: quote consumer error channel closed")
+					consumeLogger.Info("consumer error channel closed", "topic", me.quoteTopic)
 					orderChannel <- []byte{}
 					return
 				}
 				consumedCount.Add(1)
-				fmt.Println("ERROR: received consumerError:", string(consumerError.Topic), string(consumerError.Partition), consumerError.Err)
+				consumeLogger.Error("consumer error received", "topic", consumerError.Topic, "partition", consumerError.Partition, "error", consumerError.Err)
 				orderChannel <- []byte{}
 			case <-ctx.Done():
-				fmt.Println("INFO: interrupt is detected... Closing quote consumer...")
+				consumeLogger.Info("context canceled, closing quote consumer", "topic", me.quoteTopic)
 				orderChannel <- []byte{}
 				return
 			}
 		}
 	}()
 	<-orderChannel
-	fmt.Println("INFO: closing... processed", consumedCount.Load(), "messages and produced", producedCount.Load(), "messages")
+	logWithMethod("service.lifecycle").Info("matching engine stopped processing", "consumed_messages", consumedCount.Load(), "produced_messages", producedCount.Load())
 }
 
 func Min(a, b int64) int64 {
@@ -254,11 +238,17 @@ func (me *MatchingEngine) Process(inOrder *Order, producerChannel chan<- Trade, 
 			if me.metrics != nil {
 				me.metrics.ExecutedTradesCounter.Inc()
 			}
-			fmt.Printf(
-				"INFO: Executed trade %s @ %d: %s %d @ %f | Left Order ID: %s, Right Order ID: %s | "+
-					"Left Quantity: %d, Right Quantity: %d\n",
-				tradeId, ts, inAction, tradeQuantity, price, inOrder.OrderID, outOrder.OrderID,
-				inOrder.Quantity, outOrder.Quantity,
+			logWithMethod("matching.process.trade").Info(
+				"trade executed",
+				"correlation_id", tradeId,
+				"order_id", inOrder.OrderID,
+				"counterparty_order_id", outOrder.OrderID,
+				"action", inAction,
+				"quantity", tradeQuantity,
+				"price", price,
+				"timestamp", ts,
+				"remaining_in_order_quantity", inOrder.Quantity,
+				"remaining_out_order_quantity", outOrder.Quantity,
 			)
 
 			inOrder.Quantity -= tradeQuantity
